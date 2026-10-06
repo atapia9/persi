@@ -1,5 +1,6 @@
 // Abre la escena en un Chrome invisible (el Chrome instalado, sin descargar navegadores),
 // guarda una captura y lista los errores de consola. Sale con código 1 si hay errores.
+// En un equipo lento o muy cargado: CHECK_TIMEOUT_SCALE=4 npm run check (multiplica todos los plazos).
 import { chromium } from 'playwright-core';
 import { mkdir } from 'node:fs/promises';
 
@@ -13,6 +14,11 @@ const OUT_MISSION = 'screenshots/check-mision.png';
 const OUT_REPORT = 'screenshots/check-informe.png';
 const OUT_ARM = 'screenshots/check-brazo.png';
 const WAIT_MS = Number(process.env.CHECK_WAIT ?? 4000);
+// Todos los plazos pasan por T(): así un solo número los estira en un equipo lento.
+const SCALE = Number(process.env.CHECK_TIMEOUT_SCALE ?? 2);
+const T = (ms) => Math.round(ms * SCALE);
+// Cuánto esperar a que Percy termine de cargar (el modelo pesa 5 MB y el equipo puede ir lento).
+const LOAD_TIMEOUT = T(45000);
 
 await mkdir('screenshots', { recursive: true });
 
@@ -62,7 +68,7 @@ async function checkMission() {
   };
   const statusOf = (key) => page.$eval(`.sci-list li[data-target=${key}]`, (li) => li.dataset.status).catch(() => null);
   const waitStatus = (key, text) =>
-    page.waitForFunction(([k, t]) => document.querySelector(`.sci-list li[data-target=${k}]`)?.dataset.status === t, [key, text], { timeout: 20000 }).then(() => true).catch(() => false);
+    page.waitForFunction(([k, t]) => document.querySelector(`.sci-list li[data-target=${k}]`)?.dataset.status === t, [key, text], { timeout: T(20000) }).then(() => true).catch(() => false);
   // Estaciona el rover de frente a una roca, a `gap` metros de su borde.
   const park = (key, gap) =>
     page.evaluate(([key, gap]) => {
@@ -95,12 +101,12 @@ async function checkMission() {
   const stowed = await armTip();
   await page.keyboard.press('e');
   const reached = await page
-    .waitForFunction(() => window.__percy.rover.locked && !window.__percy.rover.arm.busy, null, { timeout: 8000, polling: 100 })
+    .waitForFunction(() => window.__percy.rover.locked && !window.__percy.rover.arm.busy, null, { timeout: T(8000), polling: 100 })
     .then(() => true, () => false);
   const atRock = await armTip();
   await page.screenshot({ path: OUT_ARM });
   ok('raspa y analiza con PIXL y SHERLOC', await waitStatus('bunsen', 'Raspada'), String(await statusOf('bunsen')));
-  await page.waitForFunction(() => !window.__percy.rover.locked, null, { timeout: 10000 }).catch(() => {});
+  await page.waitForFunction(() => !window.__percy.rover.locked, null, { timeout: T(10000) }).catch(() => {});
   const back = await armTip();
   const fmt = (p) => `${p.d.toFixed(2)} m adelante, ${p.y.toFixed(2)} m de alto`;
   ok(
@@ -115,7 +121,7 @@ async function checkMission() {
   await page.waitForTimeout(400);
   await page.screenshot({ path: OUT_MISSION });
   // Hasta que el brazo no se pliega, el rover no se mueve ni acepta otra orden.
-  await page.waitForFunction(() => !window.__percy.rover.locked, null, { timeout: 10000 }).catch(() => {});
+  await page.waitForFunction(() => !window.__percy.rover.locked, null, { timeout: T(10000) }).catch(() => {});
 
   // Roubion: la roca blanda se desmorona, como en el primer intento real.
   await park('roubion', 1.5);
@@ -123,11 +129,11 @@ async function checkMission() {
   await page.keyboard.press('r');
   const crumbled = await waitStatus('roubion', 'Se desmoronó');
   ok('Roubion se desmorona al perforarla', crumbled, String(await statusOf('roubion')));
-  await page.waitForFunction(() => !window.__percy.rover.locked, null, { timeout: 10000 }).catch(() => {});
+  await page.waitForFunction(() => !window.__percy.rover.locked, null, { timeout: T(10000) }).catch(() => {});
 
   // Informe para la Tierra.
   await page.click('.sci-report-btn');
-  await page.waitForSelector('.sci-report.is-open', { timeout: 5000 }).catch(() => {});
+  await page.waitForSelector('.sci-report.is-open', { timeout: T(5000) }).catch(() => {});
   const score = Number(await page.$eval('.sci-report', (el) => el.dataset.score).catch(() => 0));
   ok('el informe suma los puntos', score === 125, `${score} puntos (esperados 120 de Bunsen Peak + 5 de Roubion)`);
   await page.screenshot({ path: OUT_REPORT });
@@ -159,7 +165,7 @@ async function checkPhotos() {
           return (s.dataset.state === 'shown' && s.dataset.photo !== prev) || s.dataset.loaded === 'error';
         },
         previous,
-        { timeout: 25000 },
+        { timeout: T(25000) },
       )
       .catch(() => {});
 
@@ -177,7 +183,7 @@ async function checkPhotos() {
 
   for (const key of ['mastcam', 'navcam', 'hazcam', 'watson']) {
     try {
-      await page.click(`.cam-spot[data-camera=${key}]`, { timeout: 5000 });
+      await page.click(`.cam-spot[data-camera=${key}]`, { timeout: T(5000) });
     } catch (e) {
       fail(`no se pudo hacer clic en ${key} (${e.message.split('\n')[0]})`);
       continue;
@@ -198,7 +204,7 @@ async function checkPhotos() {
       await page.screenshot({ path: OUT_PHOTO_ZOOM });
       // Flechas: otra foto de la misma cámara.
       await page.keyboard.press('ArrowRight');
-      await page.waitForFunction((prev) => document.querySelector('.shot').dataset.photo !== prev && document.querySelector('.shot').dataset.loaded === 'true', info.photo, { timeout: 20000 }).catch(() => {});
+      await page.waitForFunction((prev) => document.querySelector('.shot').dataset.photo !== prev && document.querySelector('.shot').dataset.loaded === 'true', info.photo, { timeout: T(20000) }).catch(() => {});
       const next = await shot();
       if (next.photo === info.photo || next.cam !== info.cam) fail('la flecha no mostró otra foto de la misma cámara');
     }
@@ -312,7 +318,7 @@ async function checkMissionControl() {
     .waitForFunction(() => {
       const els = [...document.querySelectorAll('[data-telemetry]')];
       return els.length === 4 && els.every((el) => el.dataset.status !== 'loading');
-    }, null, { timeout: 25000 })
+    }, null, { timeout: T(25000) })
     .catch(() => {});
   const first = await readTelemetry();
   telemetry.push(...first);
@@ -347,8 +353,16 @@ page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`));
 page.on('requestfailed', (req) => errors.push(`requestfailed: ${req.url()} (${req.failure()?.errorText})`));
 
 try {
-  await page.goto(URL, { waitUntil: 'networkidle', timeout: 20000 });
-  await page.waitForSelector('canvas', { timeout: 10000 });
+  // No usamos 'networkidle': la página pide fuentes y datos de la NASA, y eso lo alarga sin motivo.
+  await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: LOAD_TIMEOUT });
+  await page.waitForSelector('canvas', { timeout: LOAD_TIMEOUT });
+  // Listo = Percy cargado: el aviso de carga desaparece y las 4 cámaras ya existen.
+  await page
+    .waitForFunction(() => !document.querySelector('.load-status') && document.querySelectorAll('.cam-spot').length === 4, null, { timeout: LOAD_TIMEOUT, polling: 250 })
+    .catch(async () => {
+      const status = await page.$eval('.load-status', (el) => el.textContent).catch(() => 'sin aviso de carga');
+      throw new Error(`Percy no terminó de cargar en ${LOAD_TIMEOUT / 1000} s (${status}). Prueba CHECK_TIMEOUT_SCALE=4.`);
+    });
   await checkMissionControl();
   await page.waitForTimeout(WAIT_MS);
   // Percy tiene que estar en el suelo: el aviso de carga (o de error) ya no debe verse.
